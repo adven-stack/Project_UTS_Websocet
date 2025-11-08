@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Class Q&A Board</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 800px; margin: auto; padding: 20px; background-color: #f4f4f9; }
+        h1 { color: #333; border-bottom: 2px solid #ccc; padding-bottom: 10px; }
+        #question-form { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 8px; background-color: white; }
+        #questionInput { width: 100%; padding: 10px; margin-bottom: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        #submitButton { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        #submitButton:hover { background-color: #0056b3; }
+        #questions-list { list-style: none; padding: 0; }
+        .question-item { display: flex; align-items: center; justify-content: space-between; padding: 15px; margin-bottom: 10px; background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .question-content { flex-grow: 1; padding-right: 15px; }
+        .question-text { font-size: 1.1em; margin: 0 0 5px 0; }
+        .question-meta { font-size: 0.8em; color: #666; }
+        .vote-area { text-align: center; }
+        .vote-count { font-size: 1.5em; font-weight: bold; color: #28a745; margin-bottom: 5px; }
+        .vote-button { background-color: #28a745; color: white; border: none; border-radius: 50%; width: 40px; height: 40px; font-size: 1.2em; cursor: pointer; line-height: 1; }
+        .vote-button:hover { background-color: #1e7e34; }
+    </style>
+</head>
+<body>
+
+    <h1>📝 Real-time Classroom Q&A Board</h1>
+
+    <div id="status" style="color: gray; margin-bottom: 10px;">Connecting...</div>
+
+    <div id="question-form">
+        <h2>Ajukan Pertanyaan</h2>
+        <input type="text" id="questionInput" placeholder="Ketik pertanyaan Anda di sini...">
+        <button id="submitButton">Kirim Pertanyaan</button>
+    </div>
+
+    <h2>Daftar Pertanyaan (Diurutkan berdasarkan Vote)</h2>
+    <ul id="questions-list">
+        </ul>
+
+    <script>
+        const socket = new WebSocket("ws://localhost:8080/ws");
+        const statusDiv = document.getElementById('status');
+        const questionList = document.getElementById('questions-list');
+        const questionInput = document.getElementById('questionInput');
+        const submitButton = document.getElementById('submitButton');
+
+        // --- WebSocket Handlers ---
+
+        socket.onopen = function(e) {
+            statusDiv.textContent = "Status: Connected.";
+            statusDiv.style.color = '#28a745';
+        };
+
+        socket.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            console.log(`[Message Type] ${data.type}`, data.data);
+
+            if (data.type === "INIT_STATE" || data.type === "UPDATE_STATE") {
+                renderQuestions(data.data);
+            }
+        };
+
+        socket.onclose = function(event) {
+            statusDiv.textContent = "Status: Disconnected. Please refresh.";
+            statusDiv.style.color = 'red';
+        };
+
+        socket.onerror = function(error) {
+            console.error(`WebSocket Error: ${error.message}`);
+        };
+
+        // --- Business Logic & Rendering ---
+
+        // Mengirim pesan VOTE ke server
+        function sendVote(questionId) {
+            const voteMsg = {
+                type: "VOTE",
+                data: questionId
+            };
+            socket.send(JSON.stringify(voteMsg));
+        }
+
+        // Mengirim pertanyaan baru ke server
+        function submitQuestion() {
+            const text = questionInput.value.trim();
+            if (text === "") {
+                alert("Pertanyaan tidak boleh kosong!");
+                return;
+            }
+
+            const questionMsg = {
+                type: "NEW_QUESTION",
+                data: text
+            };
+            socket.send(JSON.stringify(questionMsg));
+            
+            questionInput.value = ""; // Bersihkan input
+            questionInput.focus();
+        }
+
+        submitButton.addEventListener('click', submitQuestion);
+        questionInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                submitQuestion();
+            }
+        });
+
+        // Merender seluruh daftar pertanyaan
+        function renderQuestions(questions) {
+            questionList.innerHTML = ''; // Bersihkan list
+            
+            if (questions.length === 0) {
+                 questionList.innerHTML = '<li style="color: gray; padding: 15px;">Belum ada pertanyaan. Ajukan pertanyaan pertama Anda!</li>';
+                 return;
+            }
+
+            questions.forEach(q => {
+                const li = document.createElement('li');
+                li.className = 'question-item';
+                li.setAttribute('data-id', q.id);
+
+                li.innerHTML = `
+                    <div class="question-content">
+                        <p class="question-text">${q.text}</p>
+                        <p class="question-meta">Waktu: ${q.time} | ID: ${q.id.substring(0, 8)}</p>
+                    </div>
+                    <div class="vote-area">
+                        <div class="vote-count">${q.votes}</div>
+                        <button class="vote-button" data-id="${q.id}">+</button>
+                    </div>
+                `;
+                
+                // Tambahkan event listener untuk tombol vote
+                const voteButton = li.querySelector('.vote-button');
+                voteButton.addEventListener('click', () => sendVote(q.id));
+
+                questionList.appendChild(li);
+            });
+        }
+    </script>
+</body>
+</html>

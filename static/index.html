@@ -1,46 +1,43 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Class Q&A Board</title>
+    <title>Real-time Collaborative Task Board</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 800px; margin: auto; padding: 20px; background-color: #f4f4f9; }
-        h1 { color: #333; border-bottom: 2px solid #ccc; padding-bottom: 10px; }
-        #question-form { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 8px; background-color: white; }
-        #questionInput { width: 100%; padding: 10px; margin-bottom: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
-        #submitButton { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        #submitButton:hover { background-color: #0056b3; }
-        #questions-list { list-style: none; padding: 0; }
-        .question-item { display: flex; align-items: center; justify-content: space-between; padding: 15px; margin-bottom: 10px; background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-        .question-content { flex-grow: 1; padding-right: 15px; }
-        .question-text { font-size: 1.1em; margin: 0 0 5px 0; }
-        .question-meta { font-size: 0.8em; color: #666; }
-        .vote-area { text-align: center; }
-        .vote-count { font-size: 1.5em; font-weight: bold; color: #28a745; margin-bottom: 5px; }
-        .vote-button { background-color: #28a745; color: white; border: none; border-radius: 50%; width: 40px; height: 40px; font-size: 1.2em; cursor: pointer; line-height: 1; }
-        .vote-button:hover { background-color: #1e7e34; }
+        body { font-family: sans-serif; max-width: 800px; margin: auto; padding: 20px; background-color: #f8f9fa; }
+        h1 { color: #007bff; border-bottom: 2px solid #ccc; padding-bottom: 10px; }
+        #task-form { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 8px; background-color: white; }
+        #taskInput { width: 100%; padding: 10px; margin-bottom: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        #submitButton { padding: 10px 15px; background-color: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .task-list { list-style: none; padding: 0; }
+        .task-item { display: flex; align-items: center; justify-content: space-between; padding: 15px; margin-bottom: 10px; background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); transition: background-color 0.3s; }
+        .task-item.completed { background-color: #e9f8ed; text-decoration: line-through; color: #6c757d; }
+        .task-content { flex-grow: 1; display: flex; align-items: center; }
+        .task-checkbox { margin-right: 15px; transform: scale(1.5); }
+        .task-buttons button { margin-left: 10px; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer; }
+        .delete-button { background-color: #dc3545; color: white; }
     </style>
 </head>
 <body>
 
-    <h1>📝 Real-time Classroom Q&A Board</h1>
+    <h1>✅ Collaborative Task Board</h1>
 
-    <div id="status" style="color: gray; margin-bottom: 10px;">Connecting...</div>
+    <div id="status" style="color: gray; margin-bottom: 15px;">Connecting...</div>
 
-    <div id="question-form">
-        <h2>Ajukan Pertanyaan</h2>
-        <input type="text" id="questionInput" placeholder="Ketik pertanyaan Anda di sini...">
-        <button id="submitButton">Kirim Pertanyaan</button>
+    <div id="task-form">
+        <h2>Tambah Tugas Baru</h2>
+        <input type="text" id="taskInput" placeholder="Tugas baru atau isu mendesak...">
+        <button id="submitButton">Tambah Tugas</button>
     </div>
 
-    <h2>Daftar Pertanyaan (Diurutkan berdasarkan Vote)</h2>
-    <ul id="questions-list">
+    <h2>Daftar Tugas</h2>
+    <ul class="task-list" id="taskList">
         </ul>
 
     <script>
         const socket = new WebSocket("ws://localhost:8080/ws");
         const statusDiv = document.getElementById('status');
-        const questionList = document.getElementById('questions-list');
-        const questionInput = document.getElementById('questionInput');
+        const taskList = document.getElementById('taskList');
+        const taskInput = document.getElementById('taskInput');
         const submitButton = document.getElementById('submitButton');
 
         // --- WebSocket Handlers ---
@@ -54,8 +51,23 @@
             const data = JSON.parse(event.data);
             console.log(`[Message Type] ${data.type}`, data.data);
 
-            if (data.type === "INIT_STATE" || data.type === "UPDATE_STATE") {
-                renderQuestions(data.data);
+            switch (data.type) {
+                case "INIT_STATE":
+                    // Render semua tugas saat koneksi awal
+                    renderTasks(data.data);
+                    break;
+                case "TASK_ADDED":
+                    // Tambahkan tugas baru ke DOM
+                    addTaskToDOM(data.data, true);
+                    break;
+                case "TASK_DELETED":
+                    // Hapus tugas dari DOM
+                    removeTaskFromDOM(data.data);
+                    break;
+                case "STATUS_UPDATED":
+                    // Perbarui status (checklist dan styling)
+                    updateTaskStatusInDOM(data.data.id, data.data.status);
+                    break;
             }
         };
 
@@ -64,78 +76,103 @@
             statusDiv.style.color = 'red';
         };
 
-        socket.onerror = function(error) {
-            console.error(`WebSocket Error: ${error.message}`);
-        };
+        // --- Business Logic & DOM Manipulation ---
 
-        // --- Business Logic & Rendering ---
+        // Mengirim tugas baru
+        function submitNewTask() {
+            const text = taskInput.value.trim();
+            if (text === "") return;
 
-        // Mengirim pesan VOTE ke server
-        function sendVote(questionId) {
-            const voteMsg = {
-                type: "VOTE",
-                data: questionId
-            };
-            socket.send(JSON.stringify(voteMsg));
+            const msg = { type: "NEW_TASK", data: text };
+            socket.send(JSON.stringify(msg));
+            
+            taskInput.value = "";
+            taskInput.focus();
         }
 
-        // Mengirim pertanyaan baru ke server
-        function submitQuestion() {
-            const text = questionInput.value.trim();
-            if (text === "") {
-                alert("Pertanyaan tidak boleh kosong!");
-                return;
+        // Mengirim permintaan hapus
+        function sendDelete(taskId) {
+            const msg = { type: "DELETE_TASK", data: taskId };
+            socket.send(JSON.stringify(msg));
+        }
+
+        // Mengirim permintaan update status
+        function sendStatusUpdate(taskId, status) {
+            const msg = { type: "UPDATE_STATUS", data: { id: taskId, status: status } };
+            socket.send(JSON.stringify(msg));
+        }
+
+        // --- DOM RENDER FUNCTIONS ---
+
+        function addTaskToDOM(task) {
+            const li = document.createElement('li');
+            li.className = 'task-item';
+            li.setAttribute('data-id', task.id);
+            if (task.status) {
+                li.classList.add('completed');
             }
 
-            const questionMsg = {
-                type: "NEW_QUESTION",
-                data: text
-            };
-            socket.send(JSON.stringify(questionMsg));
+            li.innerHTML = `
+                <div class="task-content">
+                    <input type="checkbox" class="task-checkbox" data-id="${task.id}" ${task.status ? 'checked' : ''}>
+                    <span class="task-text">${task.text}</span>
+                </div>
+                <div class="task-buttons">
+                    <button class="delete-button" data-id="${task.id}">Hapus</button>
+                </div>
+            `;
             
-            questionInput.value = ""; // Bersihkan input
-            questionInput.focus();
+            // Attach event listeners
+            li.querySelector('.task-checkbox').addEventListener('change', function() {
+                sendStatusUpdate(task.id, this.checked);
+            });
+
+            li.querySelector('.delete-button').addEventListener('click', function() {
+                sendDelete(task.id);
+            });
+
+            // Tambahkan di bagian atas (terbaru di atas)
+            taskList.prepend(li);
         }
 
-        submitButton.addEventListener('click', submitQuestion);
-        questionInput.addEventListener('keypress', function(e) {
+        function renderTasks(tasks) {
+            taskList.innerHTML = '';
+            // Render dari yang paling baru ke paling lama (karena Go mengurutkan DESC)
+            tasks.forEach(task => addTaskToDOM(task));
+        }
+
+        function removeTaskFromDOM(taskId) {
+            const element = document.querySelector(`.task-item[data-id="${taskId}"]`);
+            if (element) {
+                element.remove();
+            }
+        }
+
+        function updateTaskStatusInDOM(taskId, status) {
+            const element = document.querySelector(`.task-item[data-id="${taskId}"]`);
+            const checkbox = document.querySelector(`.task-checkbox[data-id="${taskId}"]`);
+            
+            if (element) {
+                // Perbarui kelas styling
+                if (status) {
+                    element.classList.add('completed');
+                } else {
+                    element.classList.remove('completed');
+                }
+            }
+            if (checkbox) {
+                // Perbarui status checkbox
+                checkbox.checked = status;
+            }
+        }
+
+        // Global Event Listeners
+        submitButton.addEventListener('click', submitNewTask);
+        taskInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
-                submitQuestion();
+                submitNewTask();
             }
         });
-
-        // Merender seluruh daftar pertanyaan
-        function renderQuestions(questions) {
-            questionList.innerHTML = ''; // Bersihkan list
-            
-            if (questions.length === 0) {
-                 questionList.innerHTML = '<li style="color: gray; padding: 15px;">Belum ada pertanyaan. Ajukan pertanyaan pertama Anda!</li>';
-                 return;
-            }
-
-            questions.forEach(q => {
-                const li = document.createElement('li');
-                li.className = 'question-item';
-                li.setAttribute('data-id', q.id);
-
-                li.innerHTML = `
-                    <div class="question-content">
-                        <p class="question-text">${q.text}</p>
-                        <p class="question-meta">Waktu: ${q.time} | ID: ${q.id.substring(0, 8)}</p>
-                    </div>
-                    <div class="vote-area">
-                        <div class="vote-count">${q.votes}</div>
-                        <button class="vote-button" data-id="${q.id}">+</button>
-                    </div>
-                `;
-                
-                // Tambahkan event listener untuk tombol vote
-                const voteButton = li.querySelector('.vote-button');
-                voteButton.addEventListener('click', () => sendVote(q.id));
-
-                questionList.appendChild(li);
-            });
-        }
     </script>
 </body>
 </html>

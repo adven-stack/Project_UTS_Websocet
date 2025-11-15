@@ -14,39 +14,41 @@ import (
 )
 
 // --- STRUCT DATA ---
-type Question struct {
-	ID    string `json:"id"`
-	Text  string `json:"text"`
-	Votes int    `json:"votes"`
-	Time  string `json:"time"`
+
+// Task struct mewakili satu tugas
+type Task struct {
+	ID     string `json:"id"`
+	Text   string `json:"text"`
+	Status bool   `json:"status"` // false=Pending, true=Completed
+	Time   string `json:"time"`
 }
 
+// Message struct untuk komunikasi WebSocket
 type Message struct {
-	Type string          `json:"type"`
-	Data json.RawMessage `json:"data"` // Menggunakan RawMessage untuk parsing dinamis
+	Type string          `json:"type"` // "NEW_TASK", "DELETE_TASK", "UPDATE_STATUS", "INIT_STATE"
+	Data json.RawMessage `json:"data"`
 }
 
-// --- HUB DAN STATE MANAGEMENT ---
+// --- HUB DAN STATE MANAGEMENT (Menggunakan Memori) ---
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	// Izinkan semua Origin untuk pengembangan
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
 }
 
-// StateHub mengelola koneksi dan status papan Q&A
+// StateHub mengelola koneksi dan status papan Task di memori
 type StateHub struct {
 	clients    map[*websocket.Conn]bool
 	broadcast  chan []byte
 	register   chan *websocket.Conn
 	unregister chan *websocket.Conn
 
-	// Logika Bisnis: Menyimpan pertanyaan
-	questions map[string]*Question
-	mu        sync.RWMutex // Mutex untuk melindungi map questions
+	// STATE: Tugas disimpan di memori
+	tasks map[string]*Task
+	mu    sync.RWMutex // Mutex untuk melindungi map tasks
 }
 
 func newHub() *StateHub {
@@ -55,7 +57,7 @@ func newHub() *StateHub {
 		register:   make(chan *websocket.Conn),
 		unregister: make(chan *websocket.Conn),
 		clients:    make(map[*websocket.Conn]bool),
-		questions:  make(map[string]*Question),
+		tasks:      make(map[string]*Task), // Inisialisasi map tugas
 	}
 }
 
@@ -96,114 +98,46 @@ func (h *StateHub) run() {
 	}
 }
 
-// Helper untuk mendapatkan list pertanyaan yang sudah diurutkan (berdasarkan votes)
-func (h *StateHub) getSortedQuestions() []*Question {
+// Helper untuk mendapatkan list tugas (diurutkan berdasarkan waktu terbaru)
+func (h *StateHub) getTasksSorted() []*Task {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	var sorted []*Question
-	for _, q := range h.questions {
-		sorted = append(sorted, q)
+	var sorted []*Task
+	for _, t := range h.tasks {
+		sorted = append(sorted, t)
 	}
 
-	// Urutkan berdasarkan Votes (descending)
+	// Urutkan berdasarkan waktu (descending - terbaru di atas)
 	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Votes > sorted[j].Votes
+		return sorted[i].Time > sorted[j].Time // Membandingkan string waktu
 	})
 	return sorted
 }
 
 // Kirim state saat ini ke klien baru
 func (h *StateHub) sendInitialState(conn *websocket.Conn) {
-	sortedQs := h.getSortedQuestions()
+	tasks := h.getTasksSorted()
 
 	initMsg := struct {
-		Type string      `json:"type"`
-		Data []*Question `json:"data"`
+		Type string  `json:"type"`
+		Data []*Task `json:"data"`
 	}{
 		Type: "INIT_STATE",
-		Data: sortedQs,
+		Data: tasks,
 	}
 
 	response, _ := json.Marshal(initMsg)
 	conn.WriteMessage(websocket.TextMessage, response)
 }
 
-// --- HANDLER LOGIC ---
-
-// handleMessage memproses pesan dari klien
-func (h *StateHub) handleMessage(message []byte) {
-	var msg Message
-	if err := json.Unmarshal(message, &msg); err != nil {
-		log.Printf("Error unmarshalling message: %v", err)
-		return
-	}
-
-	switch msg.Type {
-	case "NEW_QUESTION":
-		h.handleNewQuestion(msg.Data)
-	case "VOTE":
-		h.handleVote(msg.Data)
-	default:
-		log.Printf("Unknown message type: %s", msg.Type)
-	}
-}
-
-// Proses pertanyaan baru
-func (h *StateHub) handleNewQuestion(data []byte) {
-	var text string
-	if err := json.Unmarshal(data, &text); err != nil {
-		log.Printf("Error unmarshalling question text: %v", err)
-		return
-	}
-
-	newQ := &Question{
-		ID:    uuid.New().String(),
-		Text:  text,
-		Votes: 0,
-		Time:  time.Now().Format("15:04:05"),
-	}
-
-	h.mu.Lock()
-	h.questions[newQ.ID] = newQ
-	h.mu.Unlock()
-
-	// Kirim state terbaru ke semua klien
-	h.sendStateUpdate()
-}
-
-// Proses vote
-func (h *StateHub) handleVote(data []byte) {
-	var qID string
-	if err := json.Unmarshal(data, &qID); err != nil {
-		log.Printf("Error unmarshalling vote ID: %v", err)
-		return
-	}
-
-	h.mu.Lock()
-	if q, ok := h.questions[qID]; ok {
-		q.Votes++
-	} else {
-		log.Printf("Question ID not found for vote: %s", qID)
-		h.mu.Unlock()
-		return
-	}
-	h.mu.Unlock()
-
-	// Kirim state terbaru ke semua klien
-	h.sendStateUpdate()
-}
-
-// Kirim state terbaru (seluruh list pertanyaan) ke channel broadcast
-func (h *StateHub) sendStateUpdate() {
-	sortedQs := h.getSortedQuestions()
-
+func (h *StateHub) sendStateUpdate(taskType string, data interface{}) {
 	updateMsg := struct {
 		Type string      `json:"type"`
-		Data []*Question `json:"data"`
+		Data interface{} `json:"data"`
 	}{
-		Type: "UPDATE_STATE",
-		Data: sortedQs,
+		Type: taskType,
+		Data: data,
 	}
 
 	response, err := json.Marshal(updateMsg)
@@ -214,7 +148,99 @@ func (h *StateHub) sendStateUpdate() {
 	h.broadcast <- response
 }
 
-// --- SERVER HTTP DAN WS HANDLERS ---
+// --- HANDLER LOGIC BARU ---
+
+func (h *StateHub) handleMessage(message []byte) {
+	var msg Message
+	if err := json.Unmarshal(message, &msg); err != nil {
+		log.Printf("Error unmarshalling message: %v", err)
+		return
+	}
+
+	switch msg.Type {
+	case "NEW_TASK":
+		h.handleNewTask(msg.Data)
+	case "DELETE_TASK":
+		h.handleDeleteTask(msg.Data)
+	case "UPDATE_STATUS":
+		h.handleUpdateStatus(msg.Data)
+	default:
+		log.Printf("Unknown message type: %s", msg.Type)
+	}
+}
+
+// Proses tugas baru
+func (h *StateHub) handleNewTask(data []byte) {
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		log.Printf("Error unmarshalling task text: %v", err)
+		return
+	}
+
+	newTask := &Task{
+		ID:     uuid.New().String(),
+		Text:   text,
+		Status: false,
+		// Format waktu yang dapat diurutkan (ISO 8601)
+		Time: time.Now().Format(time.RFC3339),
+	}
+
+	// Simpan ke memori
+	h.mu.Lock()
+	h.tasks[newTask.ID] = newTask
+	h.mu.Unlock()
+
+	// Kirim tugas yang baru ditambahkan ke semua klien
+	h.sendStateUpdate("TASK_ADDED", newTask)
+}
+
+// Proses hapus tugas
+func (h *StateHub) handleDeleteTask(data []byte) {
+	var taskID string
+	if err := json.Unmarshal(data, &taskID); err != nil {
+		log.Printf("Error unmarshalling task ID: %v", err)
+		return
+	}
+
+	// Hapus dari memori
+	h.mu.Lock()
+	delete(h.tasks, taskID)
+	h.mu.Unlock()
+
+	// Kirim ID tugas yang dihapus ke semua klien
+	h.sendStateUpdate("TASK_DELETED", taskID)
+}
+
+// Struct untuk update status
+type StatusUpdate struct {
+	ID     string `json:"id"`
+	Status bool   `json:"status"`
+}
+
+// Proses update status tugas
+func (h *StateHub) handleUpdateStatus(data []byte) {
+	var update StatusUpdate
+	if err := json.Unmarshal(data, &update); err != nil {
+		log.Printf("Error unmarshalling status update: %v", err)
+		return
+	}
+
+	// Update di memori
+	h.mu.Lock()
+	if t, ok := h.tasks[update.ID]; ok {
+		t.Status = update.Status
+	} else {
+		log.Printf("Task ID not found for status update: %s", update.ID)
+		h.mu.Unlock()
+		return
+	}
+	h.mu.Unlock()
+
+	// Kirim pembaruan status ke semua klien
+	h.sendStateUpdate("STATUS_UPDATED", update)
+}
+
+// --- MAIN FUNCTION dan WS Handlers ---
 
 func serveWs(hub *StateHub, w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -224,7 +250,6 @@ func serveWs(hub *StateHub, w http.ResponseWriter, r *http.Request) {
 	}
 
 	hub.register <- conn
-
 	go readPump(hub, conn)
 }
 
@@ -235,6 +260,7 @@ func readPump(hub *StateHub, conn *websocket.Conn) {
 	}()
 
 	for {
+		// Kita hanya peduli dengan menerima pesan teks
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
@@ -242,7 +268,6 @@ func readPump(hub *StateHub, conn *websocket.Conn) {
 			}
 			break
 		}
-		// Proses pesan yang masuk dari klien
 		hub.handleMessage(message)
 	}
 }
@@ -255,9 +280,8 @@ func main() {
 		serveWs(hub, w, r)
 	})
 
-	// Sajikan file statis (HTML/JS)
 	http.Handle("/", http.FileServer(http.Dir("./static")))
 
-	fmt.Println("Q&A Board Server started on :8080")
+	fmt.Println("Simple Collaborative Task Board Server (Memory-based) started on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }

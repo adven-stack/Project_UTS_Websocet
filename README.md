@@ -6,6 +6,16 @@ Proyek ini adalah implementasi sederhana dari papan tugas (*Task Board*) kolabor
 
 Proyek ini mengatasi masalah **sinkronisasi data mendesak** dalam tim *remote*. Ketika satu anggota tim menambahkan, menghapus, atau menandai tugas sebagai selesai, pembaruan tersebut akan **langsung** terlihat di layar semua anggota tim lainnya tanpa perlu *refresh*. Ini sangat ideal untuk *action item* rapat atau *bug* kritis.
 
+---
+
+## 💡 Mengapa Menggunakan WebSocket?
+
+Aplikasi Kolaboratif *Real-time* **wajib** menggunakan WebSocket (bukan HTTP *polling* biasa) untuk memenuhi kebutuhan utamanya, yaitu:
+
+1.  **Komunikasi Real-time (Bi-Directional):** WebSocket menyediakan koneksi persisten dua arah antara klien dan server. Ini memungkinkan server untuk *mendorong* (push) pembaruan data (misalnya, tugas baru ditambahkan) kepada semua klien yang terhubung secara instan, tanpa klien harus berulang kali meminta (polling) pembaruan.
+2.  **Pembaruan Data Langsung:** Ketika satu pengguna menandai tugas sebagai "Selesai", perubahan ini langsung disinkronkan ke semua tampilan pengguna lain dalam milidetik. Hal ini krusial untuk menjaga efisiensi dan visibilitas tugas yang tinggi.
+3.  **Sinkronisasi Antarpengguna:** WebSocket memastikan semua pengguna melihat status papan tugas yang sama persis (*single source of truth*) pada saat yang bersamaan, menghindari konflik atau kebingungan karena informasi yang ketinggalan zaman.
+
 ## 💻 Struktur Proyek
 real-time-task-board/ ├── main.go # Server Golang (WebSocket & State Logic) ├── go.mod # Dependency Golang └── static/ └── index.html # Frontend (HTML, CSS, JavaScript)
 
